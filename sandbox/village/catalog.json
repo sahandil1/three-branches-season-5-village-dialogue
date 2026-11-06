@@ -1,0 +1,147 @@
+{
+  "buildings": [
+    { "token": "home", "width": 8, "height": 7, "count": 5, "door_width": 2, "interior_props": [] },
+    {
+      "token": "inn",
+      "width": 12,
+      "height": 10,
+      "count": 1,
+      "door_width": 2,
+      "interior_props": ["hearth"]
+    },
+    {
+      "token": "shed",
+      "width": 8,
+      "height": 8,
+      "count": 1,
+      "door_width": 2,
+      "interior_props": ["repair_bench"]
+    }
+  ],
+  "props": [
+    {
+      "token": "stall",
+      "width": 2,
+      "height": 2,
+      "shape": "box",
+      "collision_scale": 1.0,
+      "activity": "tending_stall",
+      "states": ["open", "closed"],
+      "start": "closed",
+      "transition": "toggle",
+      "duration": null
+    },
+    {
+      "token": "lantern",
+      "width": 1,
+      "height": 1,
+      "shape": "circle",
+      "collision_scale": 1.0,
+      "activity": "lighting",
+      "states": ["lit", "unlit"],
+      "start": "unlit",
+      "transition": "toggle",
+      "duration": null
+    },
+    {
+      "token": "bench",
+      "width": 2,
+      "height": 1,
+      "shape": "box",
+      "collision_scale": 1.0,
+      "activity": "sitting",
+      "states": ["occupied", "empty"],
+      "start": "empty",
+      "transition": "occupancy",
+      "duration": null
+    },
+    {
+      "token": "shrine",
+      "width": 3,
+      "height": 3,
+      "shape": "box",
+      "collision_scale": 1.0,
+      "activity": "tending_shrine",
+      "states": ["tended", "untended"],
+      "start": "untended",
+      "transition": "timed",
+      "duration": 300
+    },
+    {
+      "token": "board",
+      "width": 2,
+      "height": 2,
+      "shape": "box",
+      "collision_scale": 1.0,
+      "activity": "reading_board",
+      "states": ["none"],
+      "start": "none",
+      "transition": "none",
+      "duration": null
+    },
+    {
+      "token": "plot",
+      "width": 4,
+      "height": 2,
+      "shape": "box",
+      "collision_scale": 1.0,
+      "activity": "tending_plot",
+      "states": ["tended", "overgrown"],
+      "start": "overgrown",
+      "transition": "timed",
+      "duration": 600
+    },
+    {
+      "token": "hearth",
+      "width": 1,
+      "height": 1,
+      "shape": "circle",
+      "collision_scale": 1.0,
+      "activity": "tending_hearth",
+      "states": ["lit", "unlit"],
+      "start": "unlit",
+      "transition": "toggle",
+      "duration": null
+    },
+    {
+      "token": "repair_bench",
+      "width": 2,
+      "height": 1,
+      "shape": "box",
+      "collision_scale": 1.0,
+      "activity": "working_bench",
+      "states": ["busy", "idle"],
+      "start": "idle",
+      "transition": "occupancy",
+      "duration": null
+    },
+    {
+      "token": "pump",
+      "width": 1,
+      "height": 1,
+      "shape": "circle",
+      "collision_scale": 1,
+      "activity": "working_pump",
+      "states": ["flowing", "idle"],
+      "start": "idle",
+      "transition": "timed",
+      "duration": 10
+    },
+    {
+      "token": "bell",
+      "width": 1,
+      "height": 1,
+      "shape": "circle",
+      "collision_scale": 1,
+      "activity": "ringing_bell",
+      "states": ["ringing", "silent"],
+      "start": "silent",
+      "transition": "timed",
+      "duration": 40
+    }
+  ],
+  "scenery": [
+    { "token": "pine", "width": 1, "height": 1, "shape": "circle" },
+    { "token": "crate", "width": 2, "height": 2, "shape": "box" }
+  ]
+}

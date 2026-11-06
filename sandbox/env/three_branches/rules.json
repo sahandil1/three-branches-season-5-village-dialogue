@@ -1,0 +1,34 @@
+{
+  "frame": { "cells_x": 120, "cells_y": 120, "cell_size": 1.0 },
+  "grounds": [
+    { "code": "r", "name": "road", "speed": 1.0, "passable": true, "blocks_sight": false },
+    { "code": "p", "name": "path", "speed": 1.0, "passable": true, "blocks_sight": false },
+    { "code": "b", "name": "bridge", "speed": 1.0, "passable": true, "blocks_sight": false },
+    { "code": "g", "name": "ground", "speed": 0.75, "passable": true, "blocks_sight": false },
+    { "code": "i", "name": "interior", "speed": 0.75, "passable": true, "blocks_sight": false },
+    { "code": "d", "name": "doorway", "speed": 0.75, "passable": true, "blocks_sight": false },
+    { "code": "f", "name": "field", "speed": 0.5, "passable": true, "blocks_sight": false },
+    { "code": "e", "name": "reeds", "speed": 0.5, "passable": true, "blocks_sight": false },
+    { "code": "w", "name": "water", "speed": 0.0, "passable": false, "blocks_sight": false },
+    { "code": "x", "name": "wall", "speed": 0.0, "passable": false, "blocks_sight": true }
+  ],
+  "fill": "g",
+  "emotes": ["wave", "nod", "shake_head", "point", "laugh", "shrug", "startle", "sleep", "sweep"],
+  "profile": {
+    "body_radius": 0.4,
+    "vision_degrees": 120.0,
+    "vision_range": 12.0,
+    "hearing_range": 6.0,
+    "prop_reach": 1.5
+  },
+  "phases": [
+    { "name": "dawn", "start": 1, "end": 120 },
+    { "name": "morning", "start": 121, "end": 480 },
+    { "name": "midday", "start": 481, "end": 720 },
+    { "name": "evening", "start": 721, "end": 960 },
+    { "name": "night", "start": 961, "end": 1200 }
+  ],
+  "off_phase": "day",
+  "day_ticks": 1200,
+  "physics_substeps": 3
+}

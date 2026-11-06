@@ -1,0 +1,122 @@
+{
+  "fields": {
+    "elevation_octaves": [
+      {"spacing_percent": 34, "amplitude": 1.0},
+      {"spacing_percent": 17, "amplitude": 0.45},
+      {"spacing_percent": 8, "amplitude": 0.2}
+    ],
+    "moisture_octaves": [
+      {"spacing_percent": 26, "amplitude": 1.0},
+      {"spacing_percent": 13, "amplitude": 0.5},
+      {"spacing_percent": 7, "amplitude": 0.35}
+    ],
+    "south_bias": 0.45
+  },
+  "water": {
+    "entry_band_percent": [34, 66],
+    "fork_band_percent": [16, 28],
+    "trunk_width": [5, 7],
+    "channel_width": [2, 4],
+    "mouth_separation_percent": 16,
+    "mouth_slack_percent": 5,
+    "edge_straight_percent": 5,
+    "edge_margin_percent": 9,
+    "fork_radius_percent": 7.0,
+    "fork_steps_percent": 12,
+    "fan_degrees": 55.0,
+    "clearance": 3.0,
+    "mouth_budget": 40,
+    "walker": {
+      "step": 1.5,
+      "step_budget_per_frame_cell": 4.0,
+      "self_ignore": 12,
+      "reroute_attempts": 7,
+      "reroute_degrees": 20.0,
+      "momentum": [0.55, 0.7],
+      "downhill": [0.15, 0.3],
+      "pull": [0.45, 0.6],
+      "wobble": 0.14,
+      "edge_push": 0.8,
+      "separation": 1.6,
+      "look_ahead": 5.0,
+      "meander": 0.4,
+      "meander_wavelength_percent": [16, 30]
+    }
+  },
+  "grounds": {
+    "reed_distance": 3,
+    "reed_moisture": 0.5,
+    "mouth_reed_depth_percent": 5,
+    "field_elevation": 0.45,
+    "field_moisture": 0.5,
+    "field_slope": 0.02,
+    "smoothing_passes": 2
+  },
+  "network": {
+    "road": {
+      "width": 3,
+      "band_percent": [44, 56],
+      "apron": 2,
+      "crossing_run": 11,
+      "water_clearance": 2.0,
+      "anchor_swing_percent": 3,
+      "anchor_reach_percent": 6.0,
+      "edge_straight_percent": 5,
+      "walker": {
+        "step": 1.25,
+        "step_budget_per_frame_cell": 4.0,
+        "self_ignore": 10,
+        "reroute_attempts": 7,
+        "reroute_degrees": 15.0,
+        "momentum": [0.6, 0.75],
+        "dry": [0.1, 0.25],
+        "pull": [0.5, 0.65],
+        "wobble": 0.1,
+        "band_push": 0.9,
+        "water_push": 1.4,
+        "look_ahead": 5.0,
+        "meander": 0.3,
+        "meander_wavelength_percent": [18, 32]
+      }
+    },
+    "path": {
+      "width": 1,
+      "merge_discount": 0.4,
+      "crossing_run": 9,
+      "crossing_cost": 6.0,
+      "walker": {
+        "step": 0.75,
+        "step_budget_per_frame_cell": 2.0,
+        "reroute_attempts": 7,
+        "reroute_degrees": 15.0,
+        "momentum": [0.5, 0.7],
+        "wobble": 0.15,
+        "meander": 0.5,
+        "meander_wavelength_percent": [12, 24]
+      }
+    },
+    "spawn": {"edge_inset": 3, "clearance": 2.5}
+  },
+  "sites": {
+    "margin": 2,
+    "garden_gap": 2,
+    "garden_slide": 2,
+    "plaza_radius": 3.5,
+    "reach_percent": 14,
+    "budget": 120,
+    "scores": {"bank": 1.0, "flat": 0.8, "dry": 0.6, "apart": 1.2}
+  },
+  "accessories": {
+    "setback": 1,
+    "stall": {"count": 5, "spacing": 4, "span": 18, "budget": 30},
+    "board": {"budget": 20},
+    "bench": {"plaza": 2, "market": 2, "inn": 1, "budget": 20},
+    "shrine": {"count": 2, "separation": 18, "window": 4, "budget": 10},
+    "lantern": {"spacing": 9, "market_spacing": 5},
+    "bell": {"budget": 20},
+    "pump": {"budget": 12},
+    "crate": {"count": 9, "span": 6},
+    "pine": {"spacing": 6, "scatter": 70, "gap": 3, "companion_chance": 0.55, "companions": 3, "size": [1.0, 2.0]}
+  },
+  "redraw": {"cap": 64}
+}

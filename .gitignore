@@ -1,0 +1,9 @@
+# Local virtual environment created by `python -m sandbox setup`.
+.venv/
+
+# Local secrets for the LLM example (copy .env.example to .env).
+.env
+
+# Python caches.
+__pycache__/
+*.py[cod]
