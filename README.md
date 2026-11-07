@@ -1,3 +1,14 @@
+# How the agent was developed
+
+The agent was developed using chatGPT. Since the previous agent was bad, i looked through the peer comments and realized that i have to edit the entire code to get it to work. Which i did and now it works. For this agent, I wanted to implement conversations that allowed the visitor to ask questions from villagers and then the villagers will respond to them. Also I wanted them to have a memory and take actions based on the memory. The agent can now allow the villagers to guide the visitor towards their specific workplace or else refuse to respond to commands such as where is your workplace. Each conversation will have a few options to select from and also, The agent recognizes these questions and responds.
+"Hello.
+Show me where you work.
+Show me your workplace.
+Take me to your workplace.
+Lead me to your work.
+Can you show me where you work?
+Could you take me to your workplace?"
+
 # Days at Three Branches agent
 
 Edit `agent.py` to give every one of your villagers a routine. The platform runs a separate `Agent` instance for each NPC, so instances do not share variables or memory. The supplied `sandbox/` directory contains the local runner, types, and village helpers. Leave it unchanged, and leave `requirements.in` and `requirements.txt` alone: the pinned packages match the server.

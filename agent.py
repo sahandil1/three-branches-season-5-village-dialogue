@@ -10,7 +10,14 @@ Architecture
 * Stable ID-based roles so ten villagers running the same code have distinct jobs.
 * ``ROLE_CONFIGS`` keeps role parameters separate from shared behavior.
 * Reusable behavioral blocks handle travel, socializing, prop use, and returning home.
-* Lightweight random prop activities that temporarily interrupt normal work.
+* Season 5 conversation state plus role-based scripted knowledge.
+* Lightweight random prop activities that temporarily interrupt normal work.\n* Season 5 preparation: passive scripted, observed, and remembered knowledge.
+* Numbered scripted visitor dialogue through the optional ``chat`` interface.
+* Keyword matching maps natural visitor questions onto the same scripted topics.
+* Visitor action requests are detected and stored as structured intentions.
+* Detected intentions are accepted or refused using the villager's real role/state.
+* Accepted ``show_work`` requests temporarily reuse the existing cached navigation.
+* Season 5-ready per-villager conversation state, without changing Season 3 behavior.
 
 The main optimization is that expensive layout checks are not repeated on every
 simulation tick. The village geometry is static, so walkability and legal
@@ -88,6 +95,75 @@ class Agent:
     # The same behavioral blocks are shared by every role.  These values tune
     # how often and how long each role uses those blocks, keeping jobs visibly
     # different without duplicating travel/social/prop code.
+    # ------------------------------------------------------------------
+    # Season 5 scripted knowledge
+    # ------------------------------------------------------------------
+    # These are facts the villager is allowed to know even when it cannot
+    # currently see the subject.  They are deliberately grounded in behavior
+    # that already exists in this Season 3 agent.  Later conversation code can
+    # retrieve these facts by topic instead of inventing answers.
+    COMMON_SCRIPTED_KNOWLEDGE = {
+        "village": (
+            "People in the village follow different daily routines and jobs."
+        ),
+        "home": (
+            "Each resident has a home and normally returns there toward the end of the day."
+        ),
+        "visitor": (
+            "Visitors can meet residents while they are working, travelling, resting, or socializing."
+        ),
+    }
+
+    ROLE_SCRIPTED_KNOWLEDGE = {
+        ROLE_WELL_KEEPER: {
+            "role": "I am the well keeper.",
+            "work": "I look after the village pump and spend much of my work time near it.",
+            "workplace": "My main workplace is the village pump.",
+            "routine": "I make short trips around the pump area and regularly return to it.",
+        },
+        ROLE_WORKER: {
+            "role": "I am a village worker.",
+            "work": "I travel to a work area and spend long periods working there.",
+            "workplace": "I have a regular work area away from my home.",
+            "routine": "I move between my work area and home, with pauses between trips.",
+        },
+        ROLE_SWEEPER: {
+            "role": "I help keep the village paths clean.",
+            "work": "I patrol outdoor paths and sweep at different stops along my route.",
+            "workplace": "My work takes me along several outdoor paths around the village.",
+            "routine": "I travel between patrol points and stop to sweep before moving on.",
+        },
+        ROLE_WANDERER: {
+            "role": "I spend much of my day moving around the village.",
+            "work": "I do not follow one fixed workplace; I roam, pause, rest, and meet people.",
+            "workplace": "I move between different outdoor parts of the village rather than one work site.",
+            "routine": "I wander between places, pause for a while, and may rest on a bench.",
+        },
+    }
+
+    # ------------------------------------------------------------------
+    # Season 5 numbered scripted dialogue
+    # ------------------------------------------------------------------
+    # The visitor uses player_0 in the Three Branches chat interface. Dialogue
+    # is deliberately small and deterministic at this stage. It reads the
+    # scripted knowledge already attached to the villager but does not affect
+    # movement, jobs, social emotes, navigation, or prop behavior.
+    VISITOR_ID = "player_0"
+
+    MAIN_DIALOGUE_MENU = (
+        "Say 1 for my work; 2 for our day; 3 to ask who I am; 0 to end."
+    )
+
+    WORK_DIALOGUE_MENU = (
+        "Work topic: say 1 for where I work; 2 for my routine; "
+        "9 for the main menu; 0 to end."
+    )
+
+    DAY_DIALOGUE_MENU = (
+        "Our day: say 1 about the village; 2 about going home; "
+        "9 for the main menu; 0 to end."
+    )
+
     ROLE_CONFIGS = {
         ROLE_WELL_KEEPER: {
             "prop_interval": (150, 240),
@@ -147,6 +223,9 @@ class Agent:
     SOCIAL_WAVE_TICKS = 4
     SOCIAL_ACTION_TICKS = (4, 7)
     MAX_SOCIAL_TICKS = 50
+
+    # Bound visitor-request travel so a bad target can never trap a villager.
+    MAX_INTENTION_TRAVEL_TICKS = 220
 
     def reset(self, seed: int, observation: ThreeBranchesObservation) -> None:
         """Build durable state and static navigation data once per day."""
@@ -294,6 +373,70 @@ class Agent:
         self.social_block_until = self.rng.randint(20, 55)
         self.last_passing_wave_tick = -999
 
+        # --------------------------------------------------------------
+        # Season 5 conversation state
+        # --------------------------------------------------------------
+        # This state is intentionally separate from the Season 3 emote-based
+        # social system above. It will later support visitor dialogue without
+        # changing the working movement, role, or social behavior yet. Because
+        # every villager has its own Agent instance, these values are private to
+        # that villager.
+        self.in_conversation: bool = False
+        self.conversation_partner: str | None = None
+        self.conversation_topic: str = "main"
+        self.last_visitor_message: str = ""
+        self.conversation_started_tick: int | None = None
+
+        # Season 5 intention state. An intention represents something the visitor
+        # is asking this villager to DO, rather than information the visitor is
+        # asking to KNOW. This version detects, stores, and decides whether to
+        # accept/refuse the request. Accepted requests can temporarily use the
+        # existing travel block without replacing the normal role/FSM state.
+        self.pending_intention: dict[str, object] | None = None
+        self.last_intention_type: str | None = None
+
+        # Temporary execution state for an accepted visitor request.
+        self.intention_target_key: CellKey | None = None
+        self.intention_started_tick: int | None = None
+        self.intention_attempt_ticks = 0
+
+        # Scripted knowledge is the first information source for Season 5
+        # dialogue. Every villager receives a private dictionary so later memory
+        # updates cannot accidentally modify another villager or the class-level
+        # templates. Nothing reads this during act() yet, so gameplay is unchanged.
+        self.scripted_knowledge: dict[str, str] = self._build_scripted_knowledge()
+
+        # Observed knowledge is a CURRENT perception snapshot. It is kept
+        # separate from scripted knowledge and from the memory system we will
+        # add later. The values below are refreshed from self._seen each tick,
+        # so the villager only claims to see what its normal perception reports.
+        self.observed_knowledge: dict[str, object] = {
+            "tick": day.tick(observation),
+            "visible_people": (),
+            "visible_npcs": (),
+            "visible_visitors": (),
+            "visible_positions": {},
+            "visible_expressions": {},
+        }
+
+        # Season 5 simple memory. Unlike observed_knowledge, which describes only
+        # what is visible RIGHT NOW, this dictionary keeps selected facts from
+        # earlier observations. It is passive for now: no movement, social, or
+        # role behavior reads it yet.
+        #
+        # people[person_id] stores:
+        #   kind            -> "npc", "visitor", or "person"
+        #   first_seen_tick -> first tick this villager saw the person
+        #   last_seen_tick  -> most recent tick this villager saw the person
+        #   last_position   -> last observed position
+        #   last_expression -> last observed expression type
+        #   times_seen      -> number of perception snapshots containing them
+        self.memory: dict[str, object] = {
+            "people": {},
+            "ever_seen_npcs": set(),
+            "ever_seen_visitors": set(),
+        }
+
         # Per-tick cached perception values. They are refreshed at the start of
         # every act() and then reused by all behavior methods.
         self._tick = day.tick(observation)
@@ -326,6 +469,7 @@ class Agent:
 
         # Highest strategic priority: leave enough time to get home.
         if self._tick >= self.RETURN_HOME_TICK and self.state != self.RETURN_HOME:
+            self._cancel_active_intention("It is time to return home.")
             self._finish_social(self._tick)
             self._cancel_random_prop_activity(schedule_next=False)
             self._set_state(self.RETURN_HOME, observation)
@@ -339,24 +483,31 @@ class Agent:
             and self._tick >= self.nap_start_tick
             and self.state not in {self.NAP_GO_HOME, self.NAP_SLEEP, self.RETURN_HOME}
         ):
+            self._cancel_active_intention("It is time for the scheduled nap.")
             self._finish_social(self._tick)
             self._cancel_random_prop_activity(schedule_next=False)
             self._prepare_role_after_nap()
             self._set_state(self.NAP_GO_HOME, observation)
 
-        # Priority 1: finish an existing conversation.
+        # Priority 1: execute an accepted visitor request. Strategic return-home
+        # and nap transitions above still outrank it.
+        intention_action = self._act_pending_intention(observation)
+        if intention_action is not None:
+            return intention_action
+
+        # Priority 2: finish an existing emote conversation.
         if self.social_partner is not None:
             social_action = self._block_socialize(observation)
             if social_action is not None:
                 return social_action
 
-        # Priority 2: recover from repeated failed movement.
+        # Priority 3: recover from repeated failed movement.
         if self.stuck_ticks >= 5:
             recovery = self._recover_from_stuck()
             if recovery is not None:
                 return recovery
 
-        # Priority 3: visitor interaction.
+        # Priority 4: visitor interaction.
         if (
             self._tick >= self.social_block_until
             and self.state in self.VISITOR_SOCIALIZABLE_STATES
@@ -368,7 +519,7 @@ class Agent:
                 if social_action is not None:
                     return social_action
 
-        # Priority 4: continue an already selected random prop activity. The
+        # Priority 5: continue an already selected random prop activity. The
         # visitor can still interrupt it because visitor interaction is checked
         # first; once that conversation ends, the prop trip resumes.
         if self.random_prop is not None:
@@ -376,7 +527,7 @@ class Agent:
             if prop_action is not None:
                 return prop_action
 
-        # Priority 5: NPC-to-NPC interaction. This is not allowed at the pump,
+        # Priority 6: NPC-to-NPC interaction. This is not allowed at the pump,
         # which avoids large early-day clusters of stationary villagers.
         if (
             self._tick >= self.social_block_until
@@ -389,7 +540,7 @@ class Agent:
                 if social_action is not None:
                     return social_action
 
-        # Priority 6: occasionally begin a reachable random prop activity.
+        # Priority 7: occasionally begin a reachable random prop activity.
         # This runs only in EXPLORE and only when the current role is at a safe
         # interruption point, so jobs remain visually recognizable.
         if self._maybe_start_random_prop_activity():
@@ -397,7 +548,7 @@ class Agent:
             if prop_action is not None:
                 return prop_action
 
-        # Priority 7: execute the main FSM state.
+        # Priority 8: execute the main FSM state.
         if self.state == self.NAP_GO_HOME:
             return self._act_nap_go_home(observation)
         if self.state == self.NAP_SLEEP:
@@ -425,6 +576,8 @@ class Agent:
         self._here = me.position(observation)
         self._here_key = _cell_key(layout.cell_at(observation, self._here))
         self._seen = people.seen(observation)
+        self._update_observed_knowledge()
+        self._remember_current_observations()
 
         # Hearing/proximity data is only needed when a conversation can start
         # or is already in progress. Avoid requesting it on unrelated ticks.
@@ -1828,6 +1981,865 @@ class Agent:
         return None
 
     # ------------------------------------------------------------------
+    # Season 5 scripted-knowledge helpers
+    # ------------------------------------------------------------------
+
+    def _build_scripted_knowledge(self) -> dict[str, str]:
+        """Return a private topic -> fact dictionary for this villager.
+
+        The information is intentionally static for now. Later steps can add
+        observed facts and remembered facts as separate sources rather than
+        mixing them into this dictionary.
+        """
+
+        knowledge = dict(self.COMMON_SCRIPTED_KNOWLEDGE)
+        knowledge.update(self.ROLE_SCRIPTED_KNOWLEDGE.get(self.role, {}))
+        return knowledge
+
+    def _scripted_fact(self, topic: str) -> str | None:
+        """Look up one scripted fact without changing conversation state."""
+
+        return self.scripted_knowledge.get(topic)
+
+    # ------------------------------------------------------------------
+    # Season 5 observed-knowledge helpers
+    # ------------------------------------------------------------------
+
+    def _update_observed_knowledge(self) -> None:
+        """Refresh this villager's CURRENT visible-world snapshot.
+
+        This deliberately reuses ``self._seen`` from the normal Season 3
+        perception pass. It does not call ``people.seen`` again, so adding
+        observed knowledge does not add another expensive perception query.
+        Nothing in the behavior tree reads this dictionary yet; it is only
+        preparation for later dialogue.
+        """
+
+        visible_people: list[str] = []
+        visible_npcs: list[str] = []
+        visible_visitors: list[str] = []
+        visible_positions: dict[str, dict[str, float]] = {}
+        visible_expressions: dict[str, str] = {}
+
+        for person in self._seen:
+            pid = person.get("id")
+            if not isinstance(pid, str):
+                continue
+
+            visible_people.append(pid)
+
+            if people.is_npc(pid):
+                visible_npcs.append(pid)
+            elif people.is_visitor(pid):
+                visible_visitors.append(pid)
+
+            position = person.get("position")
+            if isinstance(position, dict) and "x" in position and "y" in position:
+                visible_positions[pid] = {
+                    "x": float(position["x"]),
+                    "y": float(position["y"]),
+                }
+
+            expression = person.get("expression")
+            if isinstance(expression, dict):
+                expression_type = expression.get("type")
+                if isinstance(expression_type, str) and expression_type != "none":
+                    visible_expressions[pid] = expression_type
+
+        self.observed_knowledge = {
+            "tick": self._tick,
+            "visible_people": tuple(visible_people),
+            "visible_npcs": tuple(visible_npcs),
+            "visible_visitors": tuple(visible_visitors),
+            "visible_positions": visible_positions,
+            "visible_expressions": visible_expressions,
+        }
+
+    def _observed_people(self) -> tuple[str, ...]:
+        """Return the IDs this villager can currently see."""
+
+        value = self.observed_knowledge.get("visible_people", ())
+        return value if isinstance(value, tuple) else ()
+
+    def _observed_npcs(self) -> tuple[str, ...]:
+        """Return currently visible NPC IDs."""
+
+        value = self.observed_knowledge.get("visible_npcs", ())
+        return value if isinstance(value, tuple) else ()
+
+    def _observed_visitors(self) -> tuple[str, ...]:
+        """Return currently visible visitor IDs."""
+
+        value = self.observed_knowledge.get("visible_visitors", ())
+        return value if isinstance(value, tuple) else ()
+
+    # ------------------------------------------------------------------
+    # Season 5 simple-memory helpers
+    # ------------------------------------------------------------------
+
+    def _remember_current_observations(self) -> None:
+        """Store selected facts from the current sight snapshot.
+
+        This method deliberately reuses ``self._seen``. It never calls
+        ``people.seen`` or ``people.nearby`` itself, so remembering does not add
+        another perception query. The roster is small, so keeping one compact
+        record per person has negligible memory cost.
+        """
+
+        people_memory = self.memory.get("people")
+        if not isinstance(people_memory, dict):
+            people_memory = {}
+            self.memory["people"] = people_memory
+
+        ever_seen_npcs = self.memory.get("ever_seen_npcs")
+        if not isinstance(ever_seen_npcs, set):
+            ever_seen_npcs = set()
+            self.memory["ever_seen_npcs"] = ever_seen_npcs
+
+        ever_seen_visitors = self.memory.get("ever_seen_visitors")
+        if not isinstance(ever_seen_visitors, set):
+            ever_seen_visitors = set()
+            self.memory["ever_seen_visitors"] = ever_seen_visitors
+
+        for person in self._seen:
+            pid = person.get("id")
+            if not isinstance(pid, str) or pid == self.player_id:
+                continue
+
+            if people.is_npc(pid):
+                kind = "npc"
+                ever_seen_npcs.add(pid)
+            elif people.is_visitor(pid):
+                kind = "visitor"
+                ever_seen_visitors.add(pid)
+            else:
+                kind = "person"
+
+            position = person.get("position")
+            if isinstance(position, dict):
+                last_position = {
+                    "x": float(position.get("x", 0.0)),
+                    "y": float(position.get("y", 0.0)),
+                }
+            else:
+                last_position = None
+
+            expression = person.get("expression", {})
+            if isinstance(expression, dict):
+                expression_type = expression.get("type", "none")
+                if not isinstance(expression_type, str):
+                    expression_type = "none"
+            else:
+                expression_type = "none"
+
+            existing = people_memory.get(pid)
+            if isinstance(existing, dict):
+                first_seen_tick = existing.get("first_seen_tick", self._tick)
+                times_seen = existing.get("times_seen", 0)
+                if not isinstance(first_seen_tick, int):
+                    first_seen_tick = self._tick
+                if not isinstance(times_seen, int):
+                    times_seen = 0
+            else:
+                first_seen_tick = self._tick
+                times_seen = 0
+
+            people_memory[pid] = {
+                "kind": kind,
+                "first_seen_tick": first_seen_tick,
+                "last_seen_tick": self._tick,
+                "last_position": last_position,
+                "last_expression": expression_type,
+                "times_seen": times_seen + 1,
+            }
+
+    def _remembered_person(self, person_id: str) -> dict[str, object] | None:
+        """Return this villager's remembered record for one person."""
+
+        people_memory = self.memory.get("people", {})
+        if not isinstance(people_memory, dict):
+            return None
+
+        record = people_memory.get(person_id)
+        return record if isinstance(record, dict) else None
+
+    def _has_seen_person_before(self, person_id: str) -> bool:
+        """Whether this villager has ever visually observed the person."""
+
+        return self._remembered_person(person_id) is not None
+
+    def _remembered_people(self) -> tuple[str, ...]:
+        """Return IDs this villager remembers seeing at least once."""
+
+        people_memory = self.memory.get("people", {})
+        if not isinstance(people_memory, dict):
+            return ()
+        return tuple(sorted(pid for pid in people_memory if isinstance(pid, str)))
+
+    def _last_seen_tick(self, person_id: str) -> int | None:
+        """Return the most recent remembered sighting tick for one person."""
+
+        record = self._remembered_person(person_id)
+        if record is None:
+            return None
+        value = record.get("last_seen_tick")
+        return value if isinstance(value, int) else None
+
+    # ------------------------------------------------------------------
+    # Season 5 scripted visitor dialogue
+    # ------------------------------------------------------------------
+
+    def _begin_scripted_conversation(self, sender: str, tick: int | None) -> str:
+        """Start a numbered visitor conversation without changing game behavior."""
+
+        self.in_conversation = True
+        self.conversation_partner = sender
+        self.conversation_topic = "main"
+        self.conversation_started_tick = tick
+        return self.MAIN_DIALOGUE_MENU
+
+    def _end_scripted_conversation(self) -> str:
+        """Close the text conversation and reset only dialogue memory."""
+
+        self.in_conversation = False
+        self.conversation_partner = None
+        self.conversation_topic = "main"
+        self.conversation_started_tick = None
+        return "Goodbye. I should get back to my day."
+
+    def _main_dialogue_reply(self, choice: str) -> str:
+        """Handle one numbered choice from the main menu."""
+
+        if choice == "1":
+            self.conversation_topic = "work"
+            role_fact = self._scripted_fact("role") or "I am one of the village residents."
+            work_fact = self._scripted_fact("work") or "I have work to do around the village."
+            return f"{role_fact} {work_fact} {self.WORK_DIALOGUE_MENU}"
+
+        if choice == "2":
+            self.conversation_topic = "day"
+            village_fact = self._scripted_fact("village") or "Everyone has their own routine here."
+            return f"{village_fact} {self.DAY_DIALOGUE_MENU}"
+
+        if choice == "3":
+            role_fact = self._scripted_fact("role") or "I am one of the village residents."
+            return f"{role_fact} {self.MAIN_DIALOGUE_MENU}"
+
+        if choice == "9":
+            return self.MAIN_DIALOGUE_MENU
+
+        return (
+            "For now, please choose one of the numbered options. "
+            + self.MAIN_DIALOGUE_MENU
+        )
+
+    def _work_dialogue_reply(self, choice: str) -> str:
+        """Handle follow-up questions while the current topic is work."""
+
+        if choice == "1":
+            fact = self._scripted_fact("workplace") or "My work takes me around the village."
+            return f"{fact} {self.WORK_DIALOGUE_MENU}"
+
+        if choice == "2":
+            fact = self._scripted_fact("routine") or "I follow my usual work routine."
+            return f"{fact} {self.WORK_DIALOGUE_MENU}"
+
+        if choice == "9":
+            self.conversation_topic = "main"
+            return self.MAIN_DIALOGUE_MENU
+
+        return (
+            "That choice is not in the work menu. "
+            + self.WORK_DIALOGUE_MENU
+        )
+
+    def _day_dialogue_reply(self, choice: str) -> str:
+        """Handle follow-up questions while the current topic is the village day."""
+
+        if choice == "1":
+            fact = self._scripted_fact("village") or "People here follow different routines."
+            return f"{fact} {self.DAY_DIALOGUE_MENU}"
+
+        if choice == "2":
+            fact = self._scripted_fact("home") or "Residents return home later in the day."
+            return f"{fact} {self.DAY_DIALOGUE_MENU}"
+
+        if choice == "9":
+            self.conversation_topic = "main"
+            return self.MAIN_DIALOGUE_MENU
+
+        return (
+            "That choice is not in the day menu. "
+            + self.DAY_DIALOGUE_MENU
+        )
+
+    def _detect_intention(self, visitor_text: str) -> str | None:
+        """Detect a visitor request for an ACTION.
+
+        Questions such as "Where do you work?" remain information requests and
+        are handled by ``_keyword_command``. Only imperative/request language
+        that asks the villager to physically do something becomes an intention.
+        """
+
+        text = visitor_text.strip().lower()
+        if not text:
+            return None
+
+        show_work_phrases = (
+            "show me where you work",
+            "show me your workplace",
+            "show me your work",
+            "take me where you work",
+            "take me to your workplace",
+            "take me to your work",
+            "lead me where you work",
+            "lead me to your workplace",
+            "lead me to your work",
+            "bring me to your workplace",
+            "bring me where you work",
+            "can you show me where you work",
+            "could you show me where you work",
+            "will you show me where you work",
+            "can you take me to your workplace",
+            "could you take me to your workplace",
+            "can you lead me to your workplace",
+        )
+
+        if any(phrase in text for phrase in show_work_phrases):
+            return "show_work"
+
+        return None
+
+    def _store_intention(
+        self,
+        intention_type: str,
+        sender: str,
+        message_tick: int | None,
+        visitor_text: str,
+    ) -> None:
+        """Store the visitor's latest action request without executing it."""
+
+        self.pending_intention = {
+            "type": intention_type,
+            "requested_by": sender,
+            "requested_tick": message_tick,
+            "original_text": visitor_text,
+            "status": "detected",
+        }
+        self.last_intention_type = intention_type
+
+    def _can_accept_intention(self, intention_type: str) -> tuple[bool, str]:
+        """Decide whether the villager can reasonably accept an action request.
+
+        This decision uses only facts already present in the working agent:
+        current FSM state, role, and whether the role has a real work target.
+        It does NOT start movement.
+        """
+
+        if intention_type != "show_work":
+            return False, "I do not know how to carry out that request."
+
+        # Strategic/rest states outrank optional visitor requests.
+        if self.state == self.RETURN_HOME:
+            return False, "I am already heading home, so I cannot show you now."
+
+        if self.state in {self.NAP_GO_HOME, self.NAP_SLEEP}:
+            return False, "I am taking my rest, so I cannot show you now."
+
+        if self.role == self.ROLE_WELL_KEEPER:
+            if self.pump is None or not self.pump_approaches:
+                return False, "I cannot reach the pump right now."
+            return True, "I can show you the village pump where I work."
+
+        if self.role == self.ROLE_WORKER:
+            if self.work_target_key is None:
+                return False, "I do not have a usable work location right now."
+            return True, "I can show you my work area."
+
+        if self.role == self.ROLE_SWEEPER:
+            if not self.sweep_route_keys:
+                return False, "I do not have a usable sweeping route right now."
+            return True, "I can show you one of the paths where I work."
+
+        # Wanderers deliberately have no fixed workplace in this design.
+        if self.role == self.ROLE_WANDERER:
+            return (
+                False,
+                "I roam around the village rather than working at one fixed place.",
+            )
+
+        return False, "I do not have a fixed workplace to show you."
+
+    def _decide_pending_intention(self) -> tuple[str, str]:
+        """Mark the current pending intention accepted or refused.
+
+        Returns ``(status, reason)``. The status is conversational state only;
+        no movement or behavior is triggered in this version.
+        """
+
+        if self.pending_intention is None:
+            return "none", "There is no request to decide."
+
+        intention_type = self.pending_intention.get("type")
+        if not isinstance(intention_type, str):
+            self.pending_intention["status"] = "refused"
+            self.pending_intention["decision_reason"] = "Invalid request."
+            return "refused", "I could not understand that request."
+
+        accepted, reason = self._can_accept_intention(intention_type)
+        status = "accepted" if accepted else "refused"
+
+        self.pending_intention["status"] = status
+        self.pending_intention["decision_reason"] = reason
+        self.pending_intention["decided_tick"] = self._tick
+
+        return status, reason
+
+    def _intention_reply(self, intention_type: str) -> str:
+        """Return the accept/refuse reply for the stored visitor intention."""
+
+        status, reason = self._decide_pending_intention()
+
+        if intention_type == "show_work":
+            if status == "accepted":
+                return (
+                    "Yes. I understand that you want me to show you where I work. "
+                    f"{reason} "
+                    "I can help with that."
+                )
+
+            return (
+                "I understand that you want me to show you where I work, "
+                f"but I have to refuse for now. {reason}"
+            )
+
+        if status == "accepted":
+            return f"I can help with that. {reason}"
+
+        return f"I cannot do that right now. {reason}"
+
+    def _show_work_target(self) -> CellKey | None:
+        """Return this role's real workplace target for ``show_work``."""
+
+        if self.role == self.ROLE_WELL_KEEPER:
+            if self.keeper_anchor_key is not None:
+                return self.keeper_anchor_key
+            return self._choose_approach_key(self.pump_approaches)
+
+        if self.role == self.ROLE_WORKER:
+            return self.work_target_key
+
+        if self.role == self.ROLE_SWEEPER and self.sweep_route_keys:
+            index = self.sweep_route_index % len(self.sweep_route_keys)
+            return self.sweep_route_keys[index]
+
+        return None
+
+    def _clear_intention_execution(self) -> None:
+        """Clear temporary request movement while keeping request history."""
+
+        self.intention_target_key = None
+        self.intention_started_tick = None
+        self.intention_attempt_ticks = 0
+        self._clear_navigation(keep_destination=False)
+
+    def _cancel_active_intention(self, reason: str) -> None:
+        """Cancel an accepted/active request when a strategic state takes over."""
+
+        if self.pending_intention is None:
+            return
+
+        status = self.pending_intention.get("status")
+        if status not in {"accepted", "active"}:
+            return
+
+        self.pending_intention["status"] = "cancelled"
+        self.pending_intention["completion_reason"] = reason
+        self.pending_intention["completed_tick"] = self._tick
+        self._clear_intention_execution()
+
+    def _begin_pending_intention(self) -> bool:
+        """Turn an accepted request into a temporary workplace navigation goal."""
+
+        if self.pending_intention is None:
+            return False
+        if self.pending_intention.get("status") != "accepted":
+            return False
+        if self.pending_intention.get("type") != "show_work":
+            self.pending_intention["status"] = "failed"
+            self.pending_intention["completion_reason"] = "Unsupported intention."
+            self.pending_intention["completed_tick"] = self._tick
+            return False
+
+        target = self._show_work_target()
+        if target is None:
+            self.pending_intention["status"] = "failed"
+            self.pending_intention["completion_reason"] = "No workplace target is available."
+            self.pending_intention["completed_tick"] = self._tick
+            return False
+
+        # The request temporarily interrupts lower-priority side activities only.
+        if self.social_partner is not None:
+            self._finish_social(self._tick)
+        if self.random_prop is not None:
+            self._cancel_random_prop_activity()
+
+        self._clear_navigation(keep_destination=False)
+        self.intention_target_key = target
+        self.intention_started_tick = self._tick
+        self.intention_attempt_ticks = 0
+
+        self.pending_intention["status"] = "active"
+        self.pending_intention["started_tick"] = self._tick
+        self.pending_intention["target_key"] = target
+        self._set_destination_key(target)
+        return True
+
+    def _complete_pending_intention(self) -> None:
+        """Mark the request complete and release the temporary navigation goal."""
+
+        if self.pending_intention is not None:
+            self.pending_intention["status"] = "completed"
+            self.pending_intention["completion_reason"] = "Arrived at workplace."
+            self.pending_intention["completed_tick"] = self._tick
+
+        self._clear_intention_execution()
+
+    def _fail_pending_intention(self, reason: str) -> None:
+        """Fail cleanly instead of blocking the villager's normal routine."""
+
+        if self.pending_intention is not None:
+            self.pending_intention["status"] = "failed"
+            self.pending_intention["completion_reason"] = reason
+            self.pending_intention["completed_tick"] = self._tick
+
+        self._clear_intention_execution()
+
+    def _act_pending_intention(
+        self,
+        observation: ThreeBranchesObservation,
+    ) -> ThreeBranchesAction | None:
+        """Execute an accepted ``show_work`` request using existing navigation.
+
+        This is a temporary behavior-tree interrupt. It does not replace the
+        villager's FSM state or role-specific phase. When the workplace is
+        reached, the temporary target is cleared and normal behavior resumes.
+        """
+
+        if self.pending_intention is None:
+            return None
+
+        status = self.pending_intention.get("status")
+        if status not in {"accepted", "active"}:
+            return None
+
+        if self.state == self.RETURN_HOME:
+            self._cancel_active_intention("Returning home has higher priority.")
+            return None
+
+        if self.state in {self.NAP_GO_HOME, self.NAP_SLEEP}:
+            self._cancel_active_intention("Scheduled rest has higher priority.")
+            return None
+
+        if status == "accepted":
+            if not self._begin_pending_intention():
+                return None
+
+        target = self.intention_target_key
+        if target is None:
+            self._fail_pending_intention("The workplace target became unavailable.")
+            return None
+
+        if self._here_key is None:
+            self.intention_attempt_ticks += 1
+            if self.intention_attempt_ticks > self.MAX_INTENTION_TRAVEL_TICKS:
+                self._fail_pending_intention("Could not locate the villager on the map.")
+                return self._stand(self._heading, "shrug")
+            return self._stand(self._heading, "none")
+
+        if self._here_key == target:
+            self._complete_pending_intention()
+            return self._stand(self._heading, "point")
+
+        self.intention_attempt_ticks += 1
+        if self.intention_attempt_ticks > self.MAX_INTENTION_TRAVEL_TICKS:
+            self._fail_pending_intention("The workplace could not be reached in time.")
+            return self._stand(self._heading, "shrug")
+
+        if self.stuck_ticks >= 5:
+            recovery = self._recover_from_stuck()
+            if recovery is not None:
+                return recovery
+
+        move = self._block_travel_to(target)
+        if move is not None:
+            return move
+
+        # Allow a transient route invalidation to rebuild on the next tick.
+        return self._stand(self._heading, "none")
+
+    def _keyword_command(self, visitor_text: str) -> str | None:
+        """Map simple natural-language questions to scripted dialogue commands.
+
+        This is intentionally rule-based rather than an LLM. It keeps Season 5
+        dialogue predictable and uses the same topics as the numbered menus.
+        More specific phrases are checked before broad words such as "work".
+        """
+
+        text = visitor_text.strip().lower()
+        if not text:
+            return None
+
+        # Conversation control.
+        if any(phrase in text for phrase in (
+            "goodbye",
+            "bye",
+            "end conversation",
+            "stop talking",
+            "leave conversation",
+        )):
+            return "end"
+
+        if any(phrase in text for phrase in (
+            "main menu",
+            "go back",
+            "back to menu",
+            "start over",
+        )):
+            return "main"
+
+        # Identity.
+        if any(phrase in text for phrase in (
+            "who are you",
+            "what is your role",
+            "what's your role",
+            "what are you",
+        )):
+            return "identity"
+
+        # Work questions: specific questions come before the broad work topic.
+        if any(phrase in text for phrase in (
+            "where do you work",
+            "where is your work",
+            "where's your work",
+            "your workplace",
+            "workplace",
+        )):
+            return "workplace"
+
+        if any(phrase in text for phrase in (
+            "what is your routine",
+            "what's your routine",
+            "your routine",
+            "what do you do each day",
+            "what do you do every day",
+            "how do you spend your day",
+        )):
+            return "routine"
+
+        if any(phrase in text for phrase in (
+            "what work do you do",
+            "what is your work",
+            "what's your work",
+            "your job",
+            "what is your job",
+            "what's your job",
+        )):
+            return "work"
+
+        # Village/day questions.
+        if any(phrase in text for phrase in (
+            "tell me about the village",
+            "about the village",
+            "village life",
+            "what is the village like",
+            "what's the village like",
+        )):
+            return "village"
+
+        if any(phrase in text for phrase in (
+            "when do you go home",
+            "do you go home",
+            "going home",
+            "return home",
+            "your home",
+        )):
+            return "home"
+
+        if any(phrase in text for phrase in (
+            "tell me about your day",
+            "about your day",
+            "your day",
+            "daily life",
+        )):
+            return "day"
+
+        # Broad single-word fallbacks come last to avoid stealing more specific
+        # questions such as "Where do you work?"
+        words = set(text.replace("?", " ").replace("!", " ").replace(",", " ").split())
+        if "work" in words or "job" in words:
+            return "work"
+        if "village" in words:
+            return "village"
+        if "home" in words:
+            return "home"
+
+        return None
+
+    def _reply_to_command(self, command: str) -> str:
+        """Answer one semantic command using the same scripted knowledge/menu FSM."""
+
+        if command == "end":
+            return self._end_scripted_conversation()
+
+        if command == "main":
+            self.conversation_topic = "main"
+            return self.MAIN_DIALOGUE_MENU
+
+        if command == "identity":
+            self.conversation_topic = "main"
+            role_fact = self._scripted_fact("role") or "I am one of the village residents."
+            return f"{role_fact} {self.MAIN_DIALOGUE_MENU}"
+
+        if command == "work":
+            self.conversation_topic = "work"
+            role_fact = self._scripted_fact("role") or "I am one of the village residents."
+            work_fact = self._scripted_fact("work") or "I have work to do around the village."
+            return f"{role_fact} {work_fact} {self.WORK_DIALOGUE_MENU}"
+
+        if command == "workplace":
+            self.conversation_topic = "work"
+            fact = self._scripted_fact("workplace") or "My work takes me around the village."
+            return f"{fact} {self.WORK_DIALOGUE_MENU}"
+
+        if command == "routine":
+            self.conversation_topic = "work"
+            fact = self._scripted_fact("routine") or "I follow my usual work routine."
+            return f"{fact} {self.WORK_DIALOGUE_MENU}"
+
+        if command == "day":
+            self.conversation_topic = "day"
+            village_fact = self._scripted_fact("village") or "Everyone has their own routine here."
+            return f"{village_fact} {self.DAY_DIALOGUE_MENU}"
+
+        if command == "village":
+            self.conversation_topic = "day"
+            fact = self._scripted_fact("village") or "People here follow different routines."
+            return f"{fact} {self.DAY_DIALOGUE_MENU}"
+
+        if command == "home":
+            self.conversation_topic = "day"
+            fact = self._scripted_fact("home") or "Residents return home later in the day."
+            return f"{fact} {self.DAY_DIALOGUE_MENU}"
+
+        return self.MAIN_DIALOGUE_MENU
+
+    def chat(self, inbox):
+        """Reply to visitor messages using numbered choices or keyword matching.
+
+        The course chat interface supplies ordinary message dictionaries. At
+        this stage only ``player_0`` (the visitor) is handled. Natural-language
+        questions are mapped onto the SAME scripted topics used by the numbered
+        menus, so there is still only one conversation state machine.
+
+        A ``show_work`` request is detected, stored, then accepted/refused from
+        the villager's actual role/state. Accepted requests are executed by
+        act() as a temporary navigation interrupt using the existing travel
+        system; the villager's durable role/FSM state is preserved.
+        """
+
+        replies = []
+
+        for message in inbox:
+            if not isinstance(message, dict):
+                continue
+
+            sender = message.get("from")
+            if sender != self.VISITOR_ID:
+                continue
+
+            raw_text = message.get("text", "")
+            visitor_text = str(raw_text).strip()
+            choice = visitor_text.lower()
+            self.last_visitor_message = visitor_text
+
+            raw_tick = message.get("tick")
+            message_tick = raw_tick if isinstance(raw_tick, int) else None
+
+            # First distinguish action requests from information questions.
+            # Example:
+            #   "Where do you work?"          -> keyword information request
+            #   "Show me where you work."     -> intention: show_work
+            detected_intention = self._detect_intention(visitor_text)
+
+            # Ordinary natural-language questions still use the working keyword
+            # system from v6.
+            keyword_command = self._keyword_command(visitor_text)
+
+            if not self.in_conversation or self.conversation_partner != sender:
+                self._begin_scripted_conversation(sender, message_tick)
+
+                if choice == "0":
+                    reply_text = self._end_scripted_conversation()
+                elif detected_intention is not None:
+                    self._store_intention(
+                        detected_intention,
+                        sender,
+                        message_tick,
+                        visitor_text,
+                    )
+                    reply_text = self._intention_reply(detected_intention)
+                elif choice in {"1", "2", "3", "9"}:
+                    reply_text = self._main_dialogue_reply(choice)
+                elif keyword_command is not None:
+                    reply_text = self._reply_to_command(keyword_command)
+                else:
+                    reply_text = (
+                        "Hello. I can answer a few questions about village life. "
+                        + self.MAIN_DIALOGUE_MENU
+                    )
+
+                replies.append({"to": sender, "text": reply_text})
+                continue
+
+            if choice == "0":
+                replies.append({"to": sender, "text": self._end_scripted_conversation()})
+                continue
+
+            # Action requests outrank information-keyword matching. Detect,
+            # store, and accept/refuse here; act() performs accepted movement.
+            if detected_intention is not None:
+                self._store_intention(
+                    detected_intention,
+                    sender,
+                    message_tick,
+                    visitor_text,
+                )
+                replies.append(
+                    {"to": sender, "text": self._intention_reply(detected_intention)}
+                )
+                continue
+
+            # Natural language can jump directly to any known scripted topic,
+            # regardless of the current numbered submenu.
+            if keyword_command is not None:
+                replies.append({"to": sender, "text": self._reply_to_command(keyword_command)})
+                continue
+
+            # Preserve the working numbered-menu behavior.
+            if self.conversation_topic == "work":
+                reply_text = self._work_dialogue_reply(choice)
+            elif self.conversation_topic == "day":
+                reply_text = self._day_dialogue_reply(choice)
+            else:
+                self.conversation_topic = "main"
+                reply_text = self._main_dialogue_reply(choice)
+
+            replies.append({"to": sender, "text": reply_text})
+
+        return replies
+
+    # ------------------------------------------------------------------
     # Small state/action helpers
     # ------------------------------------------------------------------
 
@@ -1877,5 +2889,5 @@ class Agent:
         except (IndexError, ValueError):
             return 0
 
-    # Optional chat can be added later. The movement/social system above works
-    # entirely from normal sight and hearing, so no chat protocol is required.
+    # Numbered choices, keyword matching, intention decisions, and temporary
+    # ``show_work`` navigation are active. More intention types can be added later.
